@@ -7,6 +7,7 @@ from src.thirdparty.service import Service
 
 class UserAccount:
     EPOCH_TIMESTAMP = datetime.datetime(1970, 1, 1)
+    UNIT_RATE = 0.8
 
     def __init__(self):
         self.balance = Balance()
@@ -15,35 +16,39 @@ class UserAccount:
         self._calc_history_service = CalculationHistoryService()
 
     def recalculate_balance(self):
-        unit_rate = 0.8
-
         for service in self._services:
-            tariffs = service.get_tariffs()
-            h = self._calc_history_service.retrieve_history(service)
+            self.recalculate_service(service)
 
-            # find last calculation date
-            latest = self.EPOCH_TIMESTAMP
-            for p in self.payment_dates:
-                latest = p if p.timestamp() > latest.timestamp() else latest
-            d = latest
+    def recalculate_service(self, service):
+        history = self._calc_history_service.retrieve_history(service)
+        self.pay_tariff(history, self.get_highest_tariff(service, history))
 
-            highest_tariff = 0.0
-            if tariffs:
-                for tariff in tariffs:
-                    tariff_type = tariff.get_type()
-                    highest_tariff = max(highest_tariff,
-                                         self.calculate_unapplied(tariff, d, h, unit_rate, tariff_type, service))
+    def pay_tariff(self, history, highest_tariff):
+        history.apply_recalculation(highest_tariff, self.UNIT_RATE)
+        self.balance.update_balance(highest_tariff)
 
-            h.apply_recalculation(highest_tariff, unit_rate)
-            self.balance.update_balance(highest_tariff)
+    def get_highest_tariff(self, service, history):
+        tariffs = service.get_tariffs()
+        highest_tariff = 0
+        for tariff in tariffs:
+            highest_tariff = max(highest_tariff, self.calculate_unapplied(tariff, history.get_all_fees(tariff, service)))
+        return highest_tariff
 
-    def calculate_unapplied(self, tariff, last_calculation_date, h, unit_rate, t, service):
-        fees: dict = h.get_all_fees(tariff, service)
-        sum = 0.0
+    def calculate_unapplied(self, tariff, fees):
+        calculated_sum = 0.0
         for date in fees.keys():
-            if date > last_calculation_date:
-                sum += fees.get(date) * (unit_rate if (t.is_unit_based()) else 1) + tariff.get_additional_fee()
-        return sum
+            if date > self.get_last_calculation_date():
+                calculated_sum += fees.get(date) * self.get_rate(tariff) + tariff.get_additional_fee()
+        return calculated_sum
+
+    def get_last_calculation_date(self):
+        latest = self.EPOCH_TIMESTAMP
+        for p in self.payment_dates:
+            latest = p if p.timestamp() > latest.timestamp() else latest
+        return latest
+
+    def get_rate(self, tariff):
+        return self.UNIT_RATE if tariff.get_type().is_unit_based() else 1
 
     @property
     def calc_history_service(self):
